@@ -1,12 +1,23 @@
 (ns cliser.core)
 
+(def ^:private registry (atom {}))
+
+(defn register [form]
+  (let [form-id (gensym)]
+    (swap! registry assoc form-id form)
+    form-id))
+
+(defn lookup [form-id]
+  (@registry form-id))
+
 (defprotocol Endpoint
-  (execute-on [endpoint env form]))
+  (execute-on [endpoint env form-id]))
 
 (defrecord LocalEndpoint []
   Endpoint
-  (execute-on [_ env form]
-    (eval `(let ~(reduce-kv conj [] env) ~@form))))
+  (execute-on [_ env form-id]
+    (prn {:env env, :form-id form-id})
+    (eval `(let ~(reduce-kv conj [] env) ~@(lookup form-id)))))
 
 (def local-endpoint ->LocalEndpoint)
 
@@ -18,4 +29,5 @@
     (reduce #(assoc %1 `(quote ~%2) %2) {} symbols)))
 
 (defmacro with-endpoint [endpoint & body]
-  `(execute-on ~endpoint ~(local-env &env body) (quote ~body)))
+  (let [form-id (register body)]
+    `(execute-on ~endpoint ~(local-env &env body) (quote ~form-id))))
