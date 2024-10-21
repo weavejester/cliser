@@ -1,9 +1,21 @@
-(ns cliser.core)
+(ns cliser.core
+  (:require [clj-commons.digest :as digest]
+            [clojure.walk :as walk]))
+
+(defn- sorted [data]
+  (walk/postwalk #(cond
+                    (map? %) (apply sorted-map (apply concat %))
+                    (set? %) (apply sorted-set %)
+                    :else    %)
+                 data))
+
+(defn- fingerprint [data]
+  (digest/sha-256 (pr-str (sorted data))))
 
 (def ^:private registry (atom {}))
 
 (defn register [form]
-  (let [form-id (gensym)]
+  (let [form-id (fingerprint form)]
     (swap! registry assoc form-id form)
     form-id))
 
@@ -16,7 +28,6 @@
 (defrecord LocalEndpoint []
   Endpoint
   (execute-on [_ env form-id]
-    (prn {:env env, :form-id form-id})
     (eval `(let ~(reduce-kv conj [] env) ~@(lookup form-id)))))
 
 (def local-endpoint ->LocalEndpoint)
