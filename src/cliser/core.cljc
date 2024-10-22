@@ -12,16 +12,15 @@
 (defn- fingerprint [data]
   (digest/sha-256 (pr-str (sorted data))))
 
-(def ^:private registry (atom {}))
+(def ^:private form-registry (atom {}))
+(def ^:private fn-registry   (atom {}))
 
-(defn register [bindings form]
-  (let [id (fingerprint form)
-        f  (eval `(fn [{:syms [~@bindings]}] ~@form))]
-    (swap! registry assoc id f)
+(defn- register [bindings form]
+  (let [id    (fingerprint form)
+        fform `(fn [{:syms [~@bindings]}] ~@form)]
+    (swap! form-registry assoc id fform)
+    #?(:clj (swap! fn-registry assoc id (eval fform)))
     id))
-
-(defn lookup [form-id]
-  (@registry form-id))
 
 (defprotocol Endpoint
   (execute-on [endpoint env form-id]))
@@ -29,7 +28,7 @@
 (defrecord LocalEndpoint []
   Endpoint
   (execute-on [_ env id]
-    ((lookup id) env)))
+    ((@fn-registry id) env)))
 
 (def local-endpoint ->LocalEndpoint)
 
@@ -44,3 +43,6 @@
   (let [env (local-env &env body)
         id  (register (vals env) body)]
     `(execute-on ~endpoint ~env (quote ~id))))
+
+(defmacro compile-endpoints []
+  `(reset! fn-registry ~(deref form-registry)))
