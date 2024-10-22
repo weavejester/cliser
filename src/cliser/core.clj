@@ -14,10 +14,11 @@
 
 (def ^:private registry (atom {}))
 
-(defn register [form]
-  (let [form-id (fingerprint form)]
-    (swap! registry assoc form-id form)
-    form-id))
+(defn register [bindings form]
+  (let [id (fingerprint form)
+        f  (eval `(fn [{:syms [~@bindings]}] ~@form))]
+    (swap! registry assoc id f)
+    id))
 
 (defn lookup [form-id]
   (@registry form-id))
@@ -27,8 +28,8 @@
 
 (defrecord LocalEndpoint []
   Endpoint
-  (execute-on [_ env form-id]
-    (eval `(let ~(reduce-kv conj [] env) ~@(lookup form-id)))))
+  (execute-on [_ env id]
+    ((lookup id) env)))
 
 (def local-endpoint ->LocalEndpoint)
 
@@ -40,5 +41,6 @@
     (reduce #(assoc %1 `(quote ~%2) %2) {} symbols)))
 
 (defmacro with-endpoint [endpoint & body]
-  (let [form-id (register body)]
-    `(execute-on ~endpoint ~(local-env &env body) (quote ~form-id))))
+  (let [env (local-env &env body)
+        id  (register (vals env) body)]
+    `(execute-on ~endpoint ~env (quote ~id))))
