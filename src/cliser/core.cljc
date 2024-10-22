@@ -12,37 +12,38 @@
 (defn- fingerprint [data]
   (digest/sha-256 (pr-str (sorted data))))
 
+(defn- ->function [symbols body]
+  `(fn [{:syms [~@symbols]}] ~@body))
+
 (def ^:private form-registry (atom {}))
 (def ^:private fn-registry   (atom {}))
 
-(defn- register [bindings form]
-  (let [id    (fingerprint form)
-        fform `(fn [{:syms [~@bindings]}] ~@form)]
-    (swap! form-registry assoc id fform)
-    #?(:clj (swap! fn-registry assoc id (eval fform)))
-    id))
+(defn- register [symbols body]
+  (let [form    (->function symbols body)
+        form-id (fingerprint form)]
+    (swap! form-registry assoc form-id form)
+    form-id))
 
 (defprotocol Endpoint
-  (execute-on [endpoint env form-id]))
+  (execute-on [endpoint env id]))
 
 (defrecord LocalEndpoint []
   Endpoint
-  (execute-on [_ env id]
-    ((@fn-registry id) env)))
+  (execute-on [_ env id] ((@fn-registry id) env)))
 
 (def local-endpoint ->LocalEndpoint)
 
 (defn- find-symbols [form]
   (into #{} (filter symbol?) (tree-seq coll? seq form)))
 
-(defn- local-env [env form]
-  (let [symbols (filter (find-symbols form) (keys env))]
-    (reduce #(assoc %1 `(quote ~%2) %2) {} symbols)))
+(defn- binding-map [symbols]
+  (reduce #(assoc %1 `(quote ~%2) %2) {} symbols))
 
 (defmacro with-endpoint [endpoint & body]
-  (let [env (local-env &env body)
-        id  (register (vals env) body)]
-    `(execute-on ~endpoint ~env (quote ~id))))
+  (let [symbols (filter (find-symbols body) (keys &env))
+        form-id (register symbols body)]
+    `(do ~(->function symbols body)  ;; force macro evaluation
+         (execute-on ~endpoint ~(binding-map symbols) ~form-id))))
 
 (defmacro compile-endpoints []
   `(reset! fn-registry ~(deref form-registry)))
