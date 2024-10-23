@@ -1,5 +1,6 @@
 (ns cliser.core
   (:require [clj-commons.digest :as digest]
+            [clojure.core.async :as a]
             [clojure.walk :as walk]))
 
 (defn- sorted [data]
@@ -18,10 +19,9 @@
 (def ^:private form-registry (atom {}))
 (def ^:private fn-registry   (atom {}))
 
-(defn- register [symbols body]
-  (let [form    (->function symbols body)
-        form-id (fingerprint form)]
-    (swap! form-registry assoc form-id form)
+(defn- register [symbols form]
+  (let [form-id (fingerprint form)]
+    (swap! form-registry assoc form-id [symbols form])
     form-id))
 
 (defprotocol Endpoint
@@ -39,11 +39,28 @@
 (defn- binding-map [symbols]
   (reduce #(assoc %1 `(quote ~%2) %2) {} symbols))
 
-(defmacro with-endpoint [endpoint & body]
+(defmacro on-endpoint [endpoint & body]
   (let [symbols (filter (find-symbols body) (keys &env))
         form-id (register symbols body)]
-    `(do ~(->function symbols body)  ;; force macro evaluation
-         (execute-on ~endpoint ~(binding-map symbols) ~form-id))))
+    `(do
+       ;; this function does nothing at runtime, but ensures that the macros
+       ;; in its body will be evaluated at compile time
+       ~(->function symbols body)
+       (execute-on ~endpoint ~(binding-map symbols) ~form-id))))
+
+(defmacro with-endpoints [bindings & body]
+  `(let ~bindings
+     (a/go ~@(let [bindmap (apply hash-map bindings)]
+               (walk/postwalk
+                #(if (and (seq? %) (contains? bindmap (first %)))
+                   `(a/<! (on-endpoint ~@%))
+                   %)
+                body)))))
+
+(defn- form-functions [registry]
+  (reduce-kv (fn [m k [syms body]]
+               (assoc m k (->function syms `((a/go ~@body)))))
+             {} registry))
 
 (defmacro compile-endpoints []
-  `(reset! fn-registry ~(deref form-registry)))
+  `(reset! fn-registry ~(form-functions @form-registry)))
